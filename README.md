@@ -1,17 +1,38 @@
-# mesh_link
+MeshLink — Offline Field Sync
 
-A new Flutter project.
+Peer-to-peer data synchronization for field teams operating without internet. Devices exchange report updates over local Wi-Fi/Bluetooth and merge conflicting edits automatically using CRDTs — no server, no internet required.
 
-## Getting Started
 
-This project is a starting point for a Flutter application.
+Data model (v1)
 
-A few resources to get you started if this is your first Flutter project:
+Report
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Field	Type	Notes
+id	String	Unique per report
+title	String	
+description	String	Free text
+status	Enum	Open / In Progress / Resolved
+priority	Enum	Emergency / High / Medium / Low
+needs_support	Boolean	
+created_by	String	Team/device name
+updated_at	int (per field)	Timestamp used for CRDT conflict resolution
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+
+Tech stack
+Flutter (mobile app)
+SQLite via sqflite (local storage)
+Automerge (CRDT merge engine) — or hand-rolled LWW-register fallback, TBD Week 1
+Nearby Connections API (device discovery + encrypted transport, Android)
+
+Project structure
+lib/
+  models/       # Report data class + CRDT wrapper
+  db/           # SQLite setup and queries
+  sync/         # Discovery + merge logic
+  screens/      # UI screens
+  
+Setup
+flutter doctor — confirm no errors
+flutter pub get
+flutter run 
+Status
