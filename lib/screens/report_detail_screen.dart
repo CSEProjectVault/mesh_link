@@ -1,15 +1,5 @@
 import 'package:flutter/material.dart';
 import '../models/pin_models.dart';
-
-/// Displays a single Pin's structured metadata plus its append-only
-/// message thread.
-///
-/// UI-prototype sprint: [pin] and the initial thread are hardcoded via
-/// [MockData] when no arguments are passed. New messages typed here are
-/// appended to local state only — nothing is persisted or synced yet.
-/// The append-only nature is intentional and permanent: there is no
-/// edit/delete affordance anywhere in this screen, matching the P2P
-/// merge model where messages only ever get added, never mutated.
 class ReportDetailScreen extends StatefulWidget {
   final Pin? pin;
 
@@ -52,7 +42,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           text: text,
           timestamp: DateTime.now(),
           isOwnDevice: true,
-          synced: false, // pending — flips true once mesh/HTTP sync lands
+          synced: false, 
         ),
       );
       _composerController.clear();
@@ -93,10 +83,6 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     );
   }
 }
-
-/// Structured metadata block: severity + category badges, title,
-/// description, location, and freshness — everything a rescuer needs
-/// at a glance before reading the conversation below it.
 class _ReportSummaryCard extends StatelessWidget {
   final Pin pin;
   const _ReportSummaryCard({required this.pin});
@@ -223,9 +209,6 @@ class _Badge extends StatelessWidget {
     );
   }
 }
-
-/// Append-only scrollable list of thread messages. No swipe-to-delete,
-/// no long-press-to-edit — by design.
 class _ThreadList extends StatelessWidget {
   final List<ThreadMessage> messages;
   final ScrollController scrollController;
@@ -341,8 +324,6 @@ class _MessageBubble extends StatelessWidget {
     return '$h:$m';
   }
 }
-
-/// Bottom input bar for appending a new thread message.
 class _Composer extends StatelessWidget {
   final TextEditingController controller;
   final VoidCallback onSend;
