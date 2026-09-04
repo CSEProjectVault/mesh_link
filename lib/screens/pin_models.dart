@@ -1,7 +1,4 @@
 import 'package:flutter/material.dart';
-
-/// Severity levels for a Pin. Ordered low -> critical so we can use
-/// `.index` for sorting/badges later once CRDT logic lands.
 enum Severity { low, medium, high, emergency }
 
 extension SeverityX on Severity {
@@ -17,19 +14,16 @@ extension SeverityX on Severity {
         return 'Emergency';
     }
   }
-
-  /// Distinct hue per severity — kept saturated so they read clearly
-  /// against the dark Material 3 surface.
   Color get color {
     switch (this) {
       case Severity.low:
-        return const Color(0xFF4CAF7D); // muted green
+        return const Color(0xFF4CAF7D); 
       case Severity.medium:
-        return const Color(0xFFE0B84C); // amber
+        return const Color(0xFFE0B84C);
       case Severity.high:
-        return const Color(0xFFE0813F); // orange
+        return const Color(0xFFE0813F); 
       case Severity.emergency:
-        return const Color(0xFFE0524C); // red
+        return const Color(0xFFE0524C); 
     }
   }
 
@@ -46,8 +40,6 @@ extension SeverityX on Severity {
     }
   }
 }
-
-/// Category of a Pin — what kind of report it is, independent of severity.
 enum PinCategory { medical, hazard, obstacle, resource }
 
 extension PinCategoryX on PinCategory {
@@ -77,10 +69,6 @@ extension PinCategoryX on PinCategory {
     }
   }
 }
-
-/// A geo-tagged emergency report. Field-level LWW/HLC metadata will be
-/// added once the CRDT merge engine is wired in — for now this is a
-/// plain immutable value object for the UI prototype.
 @immutable
 class Pin {
   final String id;
@@ -105,10 +93,6 @@ class Pin {
     required this.createdAt,
   });
 }
-
-/// A single append-only message (or media attachment) in a Pin's thread.
-/// No edit/delete fields on purpose — the thread model is append-only,
-/// matching the P2P sync design (new messages merge in, nothing mutates).
 @immutable
 class ThreadMessage {
   final String id;
@@ -117,7 +101,7 @@ class ThreadMessage {
   final String text;
   final DateTime timestamp;
   final bool isOwnDevice;
-  final bool synced; // false = pending mesh/HTTP sync, true = confirmed
+  final bool synced; 
 
   const ThreadMessage({
     required this.id,
@@ -129,9 +113,6 @@ class ThreadMessage {
     required this.synced,
   });
 }
-
-/// Hardcoded seed data for the UI-prototype sprint. Replace with real
-/// local-DB reads once storage is wired up.
 class MockData {
   static Pin samplePin() => Pin(
         id: 'pin_001',
