@@ -1,13 +1,5 @@
 import 'package:flutter/material.dart';
 import '../models/pin_models.dart';
-
-/// Screen for composing a new emergency report Pin.
-///
-/// UI-prototype sprint: state is held locally in this widget. On submit
-/// we build a hardcoded [Pin] (fake GPS coords, fake author) and pop it
-/// back to the caller. Once local storage + CRDT are wired up, submit
-/// will instead write through the merge engine and let sync layers
-/// propagate it.
 class CreatePinScreen extends StatefulWidget {
   const CreatePinScreen({super.key});
 
@@ -49,9 +41,6 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
     }
 
     setState(() => _submitting = true);
-
-    // Hardcoded placeholder — real GPS + device identity land with the
-    // storage/CRDT milestone.
     final pin = Pin(
       id: 'pin_${DateTime.now().millisecondsSinceEpoch}',
       lat: 46.8523,
@@ -63,8 +52,6 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       authorName: 'You',
       createdAt: DateTime.now(),
     );
-
-    // Simulate a brief local-write delay so the submit state is visible.
     Future.delayed(const Duration(milliseconds: 300), () {
       if (!mounted) return;
       Navigator.of(context).pop(pin);
@@ -191,10 +178,6 @@ class _SectionLabel extends StatelessWidget {
     );
   }
 }
-
-/// Row of severity cards. Deliberately larger tap targets than a plain
-/// chip row — severity is the single most important field on a report
-/// and should be hard to misselect under stress.
 class _SeverityPicker extends StatelessWidget {
   final Severity? selected;
   final ValueChanged<Severity> onSelected;
@@ -234,8 +217,6 @@ class _SeverityPicker extends StatelessWidget {
     );
   }
 }
-
-/// Grid of category cards with icon + label.
 class _CategorySelector extends StatelessWidget {
   final PinCategory? selected;
   final ValueChanged<PinCategory> onSelected;
@@ -285,9 +266,6 @@ class _CategorySelector extends StatelessWidget {
     );
   }
 }
-
-/// Shared selectable-card visual used by both pickers: outlined by
-/// default, filled + accent-colored border when selected.
 class _SelectableCard extends StatelessWidget {
   final bool isSelected;
   final Color accentColor;
