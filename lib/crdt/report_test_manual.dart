@@ -41,4 +41,12 @@ void main() {
   print('First merge: $firstResult');
   print('Second merge (same input): $secondResult');
   print('Expected: identical — merging twice should not change anything\n');
+  print('--- Scenario 5: ambulance resolved via status field ---');
+  var clockFlag = HLC.tick(null);
+  var a5 = Report({'needsAmbulance': FieldValue(true, clockFlag)});
+  var clockResolved = HLC.tick(clockFlag);
+  var b5 = Report({'ambulanceStatus': FieldValue('Resolved', clockResolved)});
+  a5.mergeWith(b5);
+  print('Result: $a5');
+  print('Expected: needsAmbulance stays true (historical record), ambulanceStatus = Resolved\n');
 }

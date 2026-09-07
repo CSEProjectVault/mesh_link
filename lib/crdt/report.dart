@@ -13,10 +13,9 @@ class Report {
   // Merge another report into this one, field by field.
   void mergeWith(Report other) {
     other.fields.forEach((key, otherField) {
-      // Special case: needsAmbulance uses OR-merge, not plain LWW —
-      // once true, it stays true unless BOTH sides agree it's false.
-      // This matters because losing a real emergency signal is worse
-      // than a false positive.
+      // Special case 1: needsAmbulance is a STICKY safety flag.
+      // Once true, it stays true — losing a real emergency signal
+      // is worse than a false positive. This is OR-merge, not LWW.
       if (key == 'needsAmbulance' && fields.containsKey(key)) {
         bool merged = (fields[key]!.value as bool) || (otherField.value as bool);
         HLC newerTs = otherField.timestamp.isAfter(fields[key]!.timestamp)
@@ -26,9 +25,19 @@ class Report {
         return;
       }
 
-      // Default: Last-Writer-Wins, but using the HLC's isAfter()
-      // instead of a plain integer comparison — this is what makes
-      // it resistant to clock drift between devices.
+      // Special case 2: ambulanceStatus tracks the actual resolution
+      // (Requested / Dispatched / Resolved). This is a deliberate,
+      // attributable correction, so it uses plain LWW — unlike
+      // needsAmbulance, it CAN change back, because someone explicitly
+      // marked it resolved.
+      if (key == 'ambulanceStatus') {
+        if (!fields.containsKey(key) || otherField.timestamp.isAfter(fields[key]!.timestamp)) {
+          fields[key] = otherField;
+        }
+        return;
+      }
+
+      // Default: Last-Writer-Wins for everything else.
       if (!fields.containsKey(key) || otherField.timestamp.isAfter(fields[key]!.timestamp)) {
         fields[key] = otherField;
       }
