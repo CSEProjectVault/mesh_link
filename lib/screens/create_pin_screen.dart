@@ -1,34 +1,39 @@
+
 import 'package:flutter/material.dart';
+import '../config/device_identity.dart';
+import '../db/database_helper.dart';
 import '../models/pin_models.dart';
+import '../models/report_pin_adapter.dart';
+ 
 class CreatePinScreen extends StatefulWidget {
   const CreatePinScreen({super.key});
-
+ 
   @override
   State<CreatePinScreen> createState() => _CreatePinScreenState();
 }
-
+ 
 class _CreatePinScreenState extends State<CreatePinScreen> {
   final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
-
+ 
   Severity? _selectedSeverity;
   PinCategory? _selectedCategory;
   bool _submitting = false;
-
+ 
   @override
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
     super.dispose();
   }
-
+ 
   bool get _canSubmit =>
       _selectedSeverity != null &&
       _selectedCategory != null &&
       _titleController.text.trim().isNotEmpty;
-
-  void _handleSubmit() {
+ 
+  Future<void> _handleSubmit() async {
     if (!_formKey.currentState!.validate() || !_canSubmit) {
       if (_selectedSeverity == null || _selectedCategory == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -39,29 +44,43 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       }
       return;
     }
-
+ 
     setState(() => _submitting = true);
+ 
+    final author = DeviceIdentity.current;
     final pin = Pin(
-      id: 'pin_${DateTime.now().millisecondsSinceEpoch}',
-      lat: 46.8523,
+      id: ReportPinAdapter.generateId(author),
+      lat: 46.8523, // TODO: replace with real GPS later
       lng: -121.7603,
       severity: _selectedSeverity!,
       category: _selectedCategory!,
       title: _titleController.text.trim(),
       description: _descriptionController.text.trim(),
-      authorName: 'You',
+      authorName: author,
       createdAt: DateTime.now(),
     );
-    Future.delayed(const Duration(milliseconds: 300), () {
+ 
+    try {
+      final report = ReportPinAdapter.reportFromPin(pin, author);
+      for (final entry in report.fields.entries) {
+        await DatabaseHelper.instance
+            .upsertField(pin.id, entry.key, entry.value, author);
+      }
       if (!mounted) return;
-      Navigator.of(context).pop(pin);
-    });
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save report: $e')),
+      );
+    }
   }
-
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
+ 
     return Scaffold(
       appBar: AppBar(
         title: const Text('New Report'),
@@ -161,11 +180,11 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
     );
   }
 }
-
+ 
 class _SectionLabel extends StatelessWidget {
   final String text;
   const _SectionLabel(this.text);
-
+ 
   @override
   Widget build(BuildContext context) {
     return Text(
@@ -178,12 +197,13 @@ class _SectionLabel extends StatelessWidget {
     );
   }
 }
+ 
 class _SeverityPicker extends StatelessWidget {
   final Severity? selected;
   final ValueChanged<Severity> onSelected;
-
+ 
   const _SeverityPicker({required this.selected, required this.onSelected});
-
+ 
   @override
   Widget build(BuildContext context) {
     return GridView.count(
@@ -217,15 +237,16 @@ class _SeverityPicker extends StatelessWidget {
     );
   }
 }
+ 
 class _CategorySelector extends StatelessWidget {
   final PinCategory? selected;
   final ValueChanged<PinCategory> onSelected;
-
+ 
   const _CategorySelector({
     required this.selected,
     required this.onSelected,
   });
-
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -266,19 +287,20 @@ class _CategorySelector extends StatelessWidget {
     );
   }
 }
+ 
 class _SelectableCard extends StatelessWidget {
   final bool isSelected;
   final Color accentColor;
   final VoidCallback onTap;
   final Widget child;
-
+ 
   const _SelectableCard({
     required this.isSelected,
     required this.accentColor,
     required this.onTap,
     required this.child,
   });
-
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);

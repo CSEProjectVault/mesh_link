@@ -5,7 +5,8 @@ import 'pin_models.dart';
 
 class ReportPinAdapter {
   // Generates a report/pin ID that's safe to create offline, on any
-  // device, with no risk of two different phones ever picking the
+  // device, with no risk of two diff
+  //erent phones ever picking the
   // same ID — combines device name + current time + a tick counter.
   static String generateId(String deviceName) {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -67,7 +68,7 @@ class ReportPinAdapter {
         // that's already in the local DB. Real "not yet shared with
         // anyone else" status needs a separate sync-tracking column,
         // not yet built — flag this as a known gap, not a bug.
-        synced: true,
+        synced: row['from_team'] != currentDeviceName,
       );
     }).toList();
   }

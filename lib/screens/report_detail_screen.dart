@@ -1,25 +1,43 @@
 import 'package:flutter/material.dart';
+import '../config/device_identity.dart';
+import '../crdt/hlc.dart';
+import '../db/database_helper.dart';
 import '../models/pin_models.dart';
-class ReportDetailScreen extends StatefulWidget {
-  final Pin? pin;
+import '../models/report_pin_adapter.dart';
 
-  const ReportDetailScreen({super.key, this.pin});
+class ReportDetailScreen extends StatefulWidget {
+  final String pinId;
+
+  const ReportDetailScreen({super.key, required this.pinId});
 
   @override
   State<ReportDetailScreen> createState() => _ReportDetailScreenState();
 }
 
 class _ReportDetailScreenState extends State<ReportDetailScreen> {
-  late final Pin _pin;
-  late final List<ThreadMessage> _messages;
+  Pin? _pin;
+  List<ThreadMessage> _messages = [];
   final _composerController = TextEditingController();
   final _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _pin = widget.pin ?? MockData.samplePin();
-    _messages = List.of(MockData.sampleThread(_pin.id));
+    _load();
+  }
+
+  Future<void> _load() async {
+    final report = await DatabaseHelper.instance.getReport(widget.pinId);
+    final rows = await DatabaseHelper.instance.getMessages(widget.pinId);
+    if (!mounted) return;
+    setState(() {
+      _pin = ReportPinAdapter.pinFromReport(report, widget.pinId);
+      _messages = ReportPinAdapter.threadMessagesFromRows(
+        rows,
+        widget.pinId,
+        DeviceIdentity.current,
+      );
+    });
   }
 
   @override
@@ -29,24 +47,20 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     super.dispose();
   }
 
-  void _sendMessage() {
+  Future<void> _sendMessage() async {
     final text = _composerController.text.trim();
     if (text.isEmpty) return;
+    _composerController.clear();
 
-    setState(() {
-      _messages.add(
-        ThreadMessage(
-          id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
-          pinId: _pin.id,
-          authorName: 'You',
-          text: text,
-          timestamp: DateTime.now(),
-          isOwnDevice: true,
-          synced: false, 
-        ),
-      );
-      _composerController.clear();
-    });
+    await DatabaseHelper.instance.insertMessage(
+      widget.pinId,
+      'msg_${DeviceIdentity.current}_${DateTime.now().microsecondsSinceEpoch}',
+      DeviceIdentity.current,
+      'text',
+      text,
+      HLC.tick(null),
+    );
+    await _load();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -61,9 +75,13 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final pin = _pin;
+    if (pin == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
     return Scaffold(
       appBar: AppBar(
-        title: Text(_pin.category.label),
+        title: Text(pin.category.label),
         actions: [
           IconButton(
             tooltip: 'Report location on map',
@@ -74,9 +92,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
       ),
       body: Column(
         children: [
-          _ReportSummaryCard(pin: _pin),
+          _ReportSummaryCard(pin: pin),
           const Divider(height: 1),
-          Expanded(child: _ThreadList(messages: _messages, scrollController: _scrollController)),
+          Expanded(
+            child: _ThreadList(
+              messages: _messages,
+              scrollController: _scrollController,
+            ),
+          ),
           _Composer(controller: _composerController, onSend: _sendMessage),
         ],
       ),
