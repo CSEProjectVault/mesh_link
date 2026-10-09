@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import '../db/database_helper.dart';
+import '../models/pin_models.dart';
+import '../models/report_pin_adapter.dart';
+import 'report_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -8,55 +12,75 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Fake/hardcoded pins for now — real data comes later from the local database
-  final List<Map<String, dynamic>> pins = [
-    {'title': 'Bridge collapse — Zone 3', 'severity': 'Emergency', 'color': Colors.red},
-    {'title': 'Road blocked — Zone 4', 'severity': 'High', 'color': Colors.orange},
-    {'title': 'Medical camp — Zone 2', 'severity': 'Resolved', 'color': Colors.green},
-  ];
+  late Future<List<Pin>> _pinsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _pinsFuture = _loadPins();
+  }
+
+  Future<List<Pin>> _loadPins() async {
+    final ids = await DatabaseHelper.instance.getAllReportIds();
+    final pins = <Pin>[];
+    for (final id in ids) {
+      final report = await DatabaseHelper.instance.getReport(id);
+      pins.add(ReportPinAdapter.pinFromReport(report, id));
+    }
+    // Most severe first, then newest first
+    pins.sort((a, b) {
+      final bySeverity = b.severity.index.compareTo(a.severity.index);
+      return bySeverity != 0 ? bySeverity : b.createdAt.compareTo(a.createdAt);
+    });
+    return pins;
+  }
+
+  void _reload() => setState(() => _pinsFuture = _loadPins());
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('MeshLink'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Center(
-              child: Chip(
-                avatar: const Icon(Icons.wifi, size: 16, color: Colors.green),
-                label: const Text('3 nearby'),
-                backgroundColor: Colors.green[50],
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: pins.length,
-        itemBuilder: (context, index) {
-          final pin = pins[index];
-          return Card(
-            margin: const EdgeInsets.only(bottom: 10),
-            child: ListTile(
-              leading: CircleAvatar(
-                radius: 8,
-                backgroundColor: pin['color'],
-              ),
-              title: Text(pin['title']),
-              subtitle: Text(pin['severity']),
-              onTap: () {
-                Navigator.pushNamed(context, '/detail');
-              },
-            ),
+      appBar: AppBar(title: const Text('MeshLink')),
+      body: FutureBuilder<List<Pin>>(
+        future: _pinsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final pins = snapshot.data ?? [];
+          if (pins.isEmpty) {
+            return const Center(child: Text('No reports yet. Tap + to add one.'));
+          }
+          return ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: pins.length,
+            itemBuilder: (context, i) {
+              final pin = pins[i];
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  leading: CircleAvatar(radius: 8, backgroundColor: pin.severity.color),
+                  title: Text(pin.title),
+                  subtitle: Text('${pin.severity.label} · ${pin.category.label}'),
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ReportDetailScreen(pinId: pin.id),
+                      ),
+                    );
+                    _reload();
+                  },
+                ),
+              );
+            },
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.pushNamed(context, '/create');
+        onPressed: () async {
+          await Navigator.pushNamed(context, '/create');
+          _reload(); // refresh the list when she comes back from Create
         },
         child: const Icon(Icons.add),
       ),

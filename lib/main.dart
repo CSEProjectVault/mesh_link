@@ -25,7 +25,7 @@ class MeshLinkApp extends StatelessWidget {
         '/': (context) =>  LoginJoinScreen(),
         '/home': (context) => HomeScreen(),
         '/create': (context) => const CreatePinScreen(),
-        '/detail': (context) => const ReportDetailScreen(),
+        
       },
     );
   }
