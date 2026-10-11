@@ -1,326 +1,158 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:nearby_connections/nearby_connections.dart';
-import 'package:permission_handler/permission_handler.dart';
 
-/// Bytes-only transport over Google Nearby Connections.
+/// Moves raw bytes between nearby phones using Google's Nearby Connections.
+/// It knows nothing about reports or merging; SyncController connects it
+/// to SyncService.
 ///
-/// Knows nothing about reports or CRDTs. It connects to nearby phones and
-/// moves opaque byte blobs. A TCP/hotspot fallback (socket_transport.dart)
-/// would expose the same surface: [start], [stop], [sendTo], [broadcast],
-/// [onBytes], [onPeerConnected], [onPeerDisconnected], [peerCount].
-
-const String kMeshServiceId = 'com.meshlink.app.sync';
-const Strategy _strategy = Strategy.P2P_CLUSTER;
-
-// Nearby BYTES payloads are limited to ~32 KB, so larger blobs are split
-// into chunks with an 8-byte header: msgId(4) | index(2) | total(2).
-const int _maxChunkData = 28000;
-const int _headerLen = 8;
-
-typedef BytesCallback = void Function(String endpointId, Uint8List bytes);
-typedef PeerCallback = void Function(String endpointId);
-
+/// Both phones advertise AND discover, so nobody has to pick a role. To stop
+/// both sides requesting a connection to each other at the same moment, only
+/// the phone whose name sorts first sends the request.
+///
+/// NOTE: the plugin calls below follow the nearby_connections 4.x README.
+/// If the analyzer complains about a name or signature, copy the form used in
+/// the working spike (lib/sync/nearby_main.dart); the logic stays the same.
 class NearbyTransport {
-  /// Number of currently connected peers (for the Home screen chip).
-  final ValueNotifier<int> peerCount = ValueNotifier<int>(0);
+  NearbyTransport._();
+  static final NearbyTransport instance = NearbyTransport._();
 
-  BytesCallback? onBytes;
-  PeerCallback? onPeerConnected;
-  PeerCallback? onPeerDisconnected;
+  static const String _serviceId = 'com.example.mesh_link.sync';
+  static const Strategy _strategy = Strategy.P2P_CLUSTER;
 
-  String _myName = '';
+  /// Endpoint ids of phones we are currently connected to.
+  final ValueNotifier<Set<String>> connectedPeers =
+      ValueNotifier<Set<String>>(<String>{});
+
+  /// Called once a connection is fully established.
+  void Function(String endpointId)? onPeerConnected;
+
+  /// Called for every bytes payload received.
+  void Function(String endpointId, Uint8List bytes)? onBytes;
+
   bool _running = false;
-  bool _advertising = false;
-  bool _discovering = false;
-  Timer? _watchdog;
-  int _nextMsgId = Random().nextInt(1 << 20);
+  late String _myName;
+  Timer? _retryTimer;
+  final Set<String> _pending = <String>{};
 
-  final Set<String> _connected = {};
-  final Set<String> _pending = {};
-  final Map<String, String> _found = {}; // endpointId -> remote name
-  final Map<String, _Reassembly> _incoming = {};
-
-  Set<String> get peers => Set.unmodifiable(_connected);
-  bool get isRunning => _running;
-
-  void _log(String s) => debugPrint('[nearby] $s');
-
-  // ---- Lifecycle ---------------------------------------------------------
-
-  /// Starts advertising AND discovering, so every phone is both. Returns
-  /// false if permissions were denied (safe to call again later).
-  Future<bool> start(String deviceName) async {
-    if (_running) return true;
-    if (!await _ensurePermissions()) return false;
-
-    // Unique suffix so two phones with the same team name never tie.
-    _myName = '$deviceName#${Random().nextInt(0xFFFF).toRadixString(16).padLeft(4, '0')}';
+  Future<void> start(String deviceName) async {
+    if (_running) return;
     _running = true;
-    _log('starting as $_myName');
+    // The random suffix keeps names unique even if two phones pick the same
+    // team name, and gives a stable ordering for the tie-break below.
+    _myName = '$deviceName#${Random().nextInt(9000) + 1000}';
 
-    await _startAdvertising();
-    await _startDiscovery();
-    _watchdog = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _watchdogTick(),
-    );
-    return true;
+    await _advertise();
+    await _discover();
+
+    // Discovery can go quiet after a disconnect, so restart it while alone.
+    _retryTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
+      if (!_running || connectedPeers.value.isNotEmpty) return;
+      try {
+        await Nearby().stopDiscovery();
+      } catch (_) {}
+      await _discover();
+    });
   }
 
   Future<void> stop() async {
     _running = false;
-    _watchdog?.cancel();
-    _watchdog = null;
-    await _stopRadios();
-    try {
-      await Nearby().stopAllEndpoints();
-    } catch (_) {}
-    _connected.clear();
-    _pending.clear();
-    _incoming.clear();
-    peerCount.value = 0;
-  }
-
-  // ---- Sending -----------------------------------------------------------
-
-  Future<void> sendTo(String endpointId, Uint8List bytes) async {
-    if (!_connected.contains(endpointId)) return;
-    final total = max(1, (bytes.length / _maxChunkData).ceil());
-    if (total > 0xFFFF) throw StateError('Payload too large: ${bytes.length}');
-    final msgId = (_nextMsgId++) & 0x7FFFFFFF;
-
-    for (var i = 0; i < total; i++) {
-      final start = i * _maxChunkData;
-      final end = min(start + _maxChunkData, bytes.length);
-      final len = end - start;
-      final buf = Uint8List(_headerLen + len);
-      final bd = ByteData.sublistView(buf);
-      bd.setUint32(0, msgId);
-      bd.setUint16(4, i);
-      bd.setUint16(6, total);
-      buf.setRange(_headerLen, _headerLen + len, bytes, start);
-      await Nearby().sendBytesPayload(endpointId, buf);
-    }
-  }
-
-  Future<void> broadcast(Uint8List bytes) async {
-    for (final id in _connected.toList()) {
-      try {
-        await sendTo(id, bytes);
-      } catch (e) {
-        _log('send to $id failed: $e');
-      }
-    }
-  }
-
-  // ---- Advertising / discovery ------------------------------------------
-
-  Future<void> _startAdvertising() async {
-    try {
-      _advertising = await Nearby().startAdvertising(
-        _myName,
-        _strategy,
-        onConnectionInitiated: _onInitiated,
-        onConnectionResult: _onResult,
-        onDisconnected: _onDisconnected,
-        serviceId: kMeshServiceId,
-      );
-      _log('advertising: $_advertising');
-    } catch (e) {
-      _advertising = e.toString().contains('ALREADY');
-      _log('advertise error: $e');
-    }
-  }
-
-  Future<void> _startDiscovery() async {
-    try {
-      _discovering = await Nearby().startDiscovery(
-        _myName,
-        _strategy,
-        onEndpointFound: _onEndpointFound,
-        onEndpointLost: _onEndpointLost,
-        serviceId: kMeshServiceId,
-      );
-      _log('discovering: $_discovering');
-    } catch (e) {
-      _discovering = e.toString().contains('ALREADY');
-      _log('discovery error: $e');
-    }
-  }
-
-  Future<void> _stopRadios() async {
+    _retryTimer?.cancel();
     try {
       await Nearby().stopAdvertising();
-    } catch (_) {}
-    try {
       await Nearby().stopDiscovery();
-    } catch (_) {}
-    _advertising = false;
-    _discovering = false;
-    _found.clear();
-  }
-
-  /// Recovers after airplane mode, radios toggled, or a dropped link.
-  Future<void> _watchdogTick() async {
-    if (!_running) return;
-    if (_connected.isEmpty) {
-      if (_pending.isNotEmpty) return; // a connection is in progress
-      await _stopRadios();
-      await _startAdvertising();
-      await _startDiscovery();
-    } else {
-      if (!_advertising) await _startAdvertising();
-      if (!_discovering) await _startDiscovery();
+      await Nearby().stopAllEndpoints();
+    } catch (e) {
+      debugPrint('Nearby stop error: $e');
     }
+    _pending.clear();
+    connectedPeers.value = <String>{};
   }
 
-  // ---- Connection callbacks ---------------------------------------------
-
-  void _onEndpointFound(String id, String name, String serviceId) {
-    _found[id] = name;
-    if (_connected.contains(id) || _pending.contains(id)) return;
-
-    // Only one side initiates, otherwise both request at once and collide.
-    if (_myName.compareTo(name) < 0) {
-      _request(id);
-    } else {
-      // The other side should initiate. Fall back if it never does.
-      Future.delayed(const Duration(seconds: 8), () {
-        if (_running &&
-            _found.containsKey(id) &&
-            !_connected.contains(id) &&
-            !_pending.contains(id)) {
-          _request(id);
-        }
-      });
-    }
-  }
-
-  void _onEndpointLost(String? id) {
-    if (id == null) return;
-    _found.remove(id);
-    _pending.remove(id);
-  }
-
-  Future<void> _request(String id) async {
-    _pending.add(id);
-    _log('requesting connection to $id');
+  Future<void> send(String endpointId, Uint8List bytes) async {
     try {
-      await Nearby().requestConnection(
+      await Nearby().sendBytesPayload(endpointId, bytes);
+    } catch (e) {
+      debugPrint('Nearby send failed: $e');
+    }
+  }
+
+  // ---- Advertising and discovery ------------------------------------------
+
+  Future<void> _advertise() async {
+    try {
+      await Nearby().startAdvertising(
         _myName,
-        id,
-        onConnectionInitiated: _onInitiated,
-        onConnectionResult: _onResult,
+        _strategy,
+        onConnectionInitiated: _onConnectionInitiated,
+        onConnectionResult: _onConnectionResult,
         onDisconnected: _onDisconnected,
+        serviceId: _serviceId,
       );
     } catch (e) {
-      _pending.remove(id);
-      _log('requestConnection failed: $e');
+      debugPrint('Nearby advertise failed: $e');
     }
   }
 
-  void _onInitiated(String id, ConnectionInfo info) {
-    _pending.add(id);
-    _log('connection initiated with ${info.endpointName}, accepting');
-    // NOTE: "Recieved" is misspelled in the plugin's own API.
+  Future<void> _discover() async {
+    try {
+      await Nearby().startDiscovery(
+        _myName,
+        _strategy,
+        onEndpointFound: (String id, String name, String serviceId) {
+          if (connectedPeers.value.contains(id) || _pending.contains(id)) {
+            return;
+          }
+          // Only the phone with the smaller name initiates.
+          if (_myName.compareTo(name) >= 0) return;
+          _pending.add(id);
+          Nearby().requestConnection(
+            _myName,
+            id,
+            onConnectionInitiated: _onConnectionInitiated,
+            onConnectionResult: _onConnectionResult,
+            onDisconnected: _onDisconnected,
+          );
+        },
+        onEndpointLost: (String? id) {
+          if (id != null) _pending.remove(id);
+        },
+        serviceId: _serviceId,
+      );
+    } catch (e) {
+      debugPrint('Nearby discovery failed: $e');
+    }
+  }
+
+  // ---- Connection lifecycle -----------------------------------------------
+
+  void _onConnectionInitiated(String id, ConnectionInfo info) {
+    // Demo mode: accept every connection automatically.
+    // (Future work: require a shared trip code before accepting.)
     Nearby().acceptConnection(
       id,
-      onPayLoadRecieved: (endpointId, payload) {
+      onPayLoadRecieved: (String endpointId, Payload payload) {
         if (payload.type == PayloadType.BYTES && payload.bytes != null) {
-          _handleChunk(endpointId, payload.bytes!);
+          onBytes?.call(endpointId, payload.bytes!);
         }
       },
-      onPayloadTransferUpdate: (endpointId, update) {},
+      onPayloadTransferUpdate: (String endpointId, PayloadTransferUpdate u) {},
     );
   }
 
-  void _onResult(String id, Status status) {
+  void _onConnectionResult(String id, Status status) {
     _pending.remove(id);
-    _log('connection result $id: $status');
     if (status == Status.CONNECTED) {
-      _connected.add(id);
-      peerCount.value = _connected.length;
+      connectedPeers.value = <String>{...connectedPeers.value, id};
       onPeerConnected?.call(id);
     }
   }
 
   void _onDisconnected(String id) {
-    _log('disconnected: $id');
-    _connected.remove(id);
     _pending.remove(id);
-    _incoming.removeWhere((key, _) => key.startsWith('$id:'));
-    peerCount.value = _connected.length;
-    onPeerDisconnected?.call(id);
-    Future.delayed(const Duration(seconds: 3), _watchdogTick);
+    connectedPeers.value = <String>{...connectedPeers.value}..remove(id);
   }
-
-  // ---- Reassembly --------------------------------------------------------
-
-  void _handleChunk(String endpointId, Uint8List raw) {
-    if (raw.length < _headerLen) return;
-    final bd = ByteData.sublistView(raw);
-    final msgId = bd.getUint32(0);
-    final idx = bd.getUint16(4);
-    final total = bd.getUint16(6);
-    final data = Uint8List.fromList(Uint8List.sublistView(raw, _headerLen));
-
-    if (total <= 1) {
-      onBytes?.call(endpointId, data);
-      return;
-    }
-
-    final key = '$endpointId:$msgId';
-    final r = _incoming.putIfAbsent(key, () => _Reassembly(total));
-    if (idx >= r.parts.length || r.parts[idx] != null) return;
-    r.parts[idx] = data;
-    r.received++;
-
-    if (r.received == r.parts.length) {
-      _incoming.remove(key);
-      final builder = BytesBuilder(copy: false);
-      for (final p in r.parts) {
-        builder.add(p!);
-      }
-      onBytes?.call(endpointId, builder.takeBytes());
-    }
-  }
-
-  // ---- Permissions -------------------------------------------------------
-
-  Future<bool> _ensurePermissions() async {
-    if (!Platform.isAndroid) return true;
-    final sdk = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
-
-    final perms = <Permission>[Permission.location];
-    if (sdk >= 31) {
-      perms.addAll([
-        Permission.bluetoothAdvertise,
-        Permission.bluetoothConnect,
-        Permission.bluetoothScan,
-      ]);
-    }
-    if (sdk >= 33) perms.add(Permission.nearbyWifiDevices);
-
-    final results = await perms.request();
-    final denied = results.entries.where((e) => !e.value.isGranted).toList();
-    for (final d in denied) {
-      _log('DENIED: ${d.key}');
-    }
-    if (!(await Permission.location.serviceStatus).isEnabled) {
-      _log('WARNING: Location services are OFF; discovery may fail.');
-    }
-    return denied.isEmpty;
-  }
-}
-
-class _Reassembly {
-  final List<Uint8List?> parts;
-  int received = 0;
-  _Reassembly(int total) : parts = List<Uint8List?>.filled(total, null);
 }

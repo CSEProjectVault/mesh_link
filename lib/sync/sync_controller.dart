@@ -1,90 +1,80 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'nearby_transport.dart';
 import 'sync_service.dart';
 
-/// Glue between the transport (bytes) and SyncService (merge logic).
-/// Replaces the stub; keeps the same public surface the screens use:
-///   SyncController.peerCount, start(), broadcastReport().
-///
-/// Sync is state-based: on connect, each side sends everything it has, and
-/// merging is idempotent, so duplicates are harmless.
+/// Glue between the transport (bytes over Nearby) and SyncService
+/// (reports and merging). Screens only use three things from here:
+///   - start(deviceName)       called once from the home screen
+///   - broadcastReport(id)     called after any local edit or message
+///   - peerCount               number of connected phones, for the UI chip
 class SyncController {
   SyncController._();
 
-  static final NearbyTransport _transport = NearbyTransport();
-
-  /// Connected peers, for the Home screen chip.
-  static final ValueNotifier<int> peerCount = _transport.peerCount;
-
-  /// Bumped by SyncService whenever incoming data changed the local DB.
-  /// Screens can listen to this to reload without being reopened.
-  static ValueNotifier<int> get dataVersion =>
-      SyncService.instance.dataVersion;
-
+  static final ValueNotifier<int> peerCount = ValueNotifier<int>(0);
   static bool _started = false;
-  static bool _starting = false;
 
-  // Incoming merges and outgoing snapshots run one at a time so DB
-  // reads and writes never interleave.
-  static Future<void> _queue = Future.value();
-
-  /// Call after login with the team/device name. Safe to call repeatedly.
+  /// Safe to call more than once; only the first call does anything.
   static Future<void> start(String deviceName) async {
-    if (_started || _starting) return;
-    _starting = true;
+    if (_started) return;
+    _started = true;
 
-    _transport.onPeerConnected = (endpointId) {
-      _enqueue(() async {
-        final payloads = await SyncService.instance.buildSnapshotPayloads();
-        for (final p in payloads) {
-          await _transport.sendTo(endpointId, p);
-        }
-        debugPrint('[sync] sent ${payloads.length} payloads to $endpointId');
-      });
-    };
+    await _requestPermissions();
 
-    _transport.onBytes = (endpointId, bytes) {
-      _enqueue(() async {
-        final changed = await SyncService.instance.applyIncoming(bytes);
-        debugPrint(
-          '[sync] ${bytes.length} B from $endpointId, changed=$changed',
-        );
-      });
-    };
+    final transport = NearbyTransport.instance;
 
-    try {
-      _started = await _transport.start(deviceName);
-    } finally {
-      _starting = false;
-    }
-  }
+    transport.connectedPeers.addListener(() {
+      peerCount.value = transport.connectedPeers.value.length;
+    });
 
-  /// Push one report (fields + messages) to every connected peer.
-  /// Call after creating a report or sending a message.
-  static Future<void> broadcastReport(String reportId) async {
-    if (_transport.peers.isEmpty) return;
-    try {
-      final payloads =
-          await SyncService.instance.buildReportPayloads(reportId);
+    // A phone just connected: send it everything we have. It does the same
+    // for us. Merging is idempotent, so duplicates and any order are fine.
+    transport.onPeerConnected = (String peerId) async {
+      final payloads = await SyncService.instance.buildSnapshotPayloads();
       for (final p in payloads) {
-        await _transport.broadcast(p);
+        await transport.send(peerId, p);
       }
-    } catch (e) {
-      debugPrint('[sync] broadcastReport failed: $e');
+    };
+
+    transport.onBytes = (String peerId, Uint8List bytes) async {
+      await SyncService.instance.applyIncoming(bytes);
+    };
+
+    await transport.start(deviceName);
+  }
+
+  /// Push one report (fields + messages) to every connected phone.
+  /// Does nothing when nobody is connected; the data goes out in the full
+  /// snapshot the next time a phone connects.
+  static Future<void> broadcastReport(String reportId) async {
+    final peers = NearbyTransport.instance.connectedPeers.value;
+    if (peers.isEmpty) return;
+
+    final payloads = await SyncService.instance.buildReportPayloads(reportId);
+    for (final peer in peers) {
+      for (final p in payloads) {
+        await NearbyTransport.instance.send(peer, p);
+      }
     }
   }
 
-  static Future<void> stop() async {
-    await _transport.stop();
-    _started = false;
-  }
+  static Future<void> _requestPermissions() async {
+    final results = await <Permission>[
+      Permission.location,
+      Permission.bluetoothScan,
+      Permission.bluetoothAdvertise,
+      Permission.bluetoothConnect,
+      Permission.nearbyWifiDevices,
+    ].request();
 
-  static void _enqueue(Future<void> Function() job) {
-    _queue = _queue.then((_) => job()).catchError((Object e) {
-      debugPrint('[sync] job failed: $e');
+    // Some of these do not exist on older Android versions and report as
+    // denied there, so this only logs. If sync does not start, this log is
+    // the first place to look.
+    results.forEach((permission, status) {
+      if (!status.isGranted) {
+        debugPrint('Sync: permission not granted: $permission ($status)');
+      }
     });
   }
 }
