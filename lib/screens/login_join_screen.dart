@@ -1,22 +1,44 @@
 import 'package:flutter/material.dart';
-
+import '../config/device_identity.dart';
+ 
 class LoginJoinScreen extends StatefulWidget {
   const LoginJoinScreen({super.key});
-
+ 
   @override
   State<LoginJoinScreen> createState() => _LoginJoinScreenState();
 }
-
+ 
 class _LoginJoinScreenState extends State<LoginJoinScreen> {
-  // This is the "state" — which tab is currently selected.
-  // When this changes, Flutter automatically redraws the screen.
+  // Which tab is currently selected. Changing it redraws the screen.
   bool showOrgTab = true;
-
+  final _teamController = TextEditingController();
+ 
+  @override
+  void dispose() {
+    _teamController.dispose();
+    super.dispose();
+  }
+ 
+  /// Every way into the app goes through here. The team name becomes this
+  /// phone's identity: it labels reports, messages and the Nearby device name,
+  /// so the two phones must use different names (e.g. Alpha and Bravo).
+  void _enter() {
+    final name = _teamController.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your team name first.')),
+      );
+      return;
+    }
+    DeviceIdentity.current = name;
+    Navigator.pushReplacementNamed(context, '/home');
+  }
+ 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(
             children: [
@@ -31,8 +53,16 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
                 style: TextStyle(color: Colors.grey),
               ),
               const SizedBox(height: 24),
-
-              // Tab toggle
+              TextField(
+                controller: _teamController,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Your team name',
+                  hintText: 'e.g. Alpha',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
               Container(
                 decoration: BoxDecoration(
                   color: Colors.grey[200],
@@ -57,8 +87,6 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-
-              // Show different content depending on which tab is selected
               if (showOrgTab) _buildOrgForm() else _buildTripForm(),
             ],
           ),
@@ -66,7 +94,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
       ),
     );
   }
-
+ 
   Widget _buildTab(String label, bool selected) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -85,7 +113,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
       ),
     );
   }
-
+ 
   Widget _buildOrgForm() {
     return Column(
       children: [
@@ -108,10 +136,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: () {
-              // Fake login for now — just navigate to Home
-              Navigator.pushReplacementNamed(context, '/home');
-            },
+            onPressed: _enter, // fake login for now
             child: const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
               child: Text('Log in'),
@@ -121,7 +146,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
       ],
     );
   }
-
+ 
   Widget _buildTripForm() {
     return Column(
       children: [
@@ -146,9 +171,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: () {
-              Navigator.pushReplacementNamed(context, '/home');
-            },
+            onPressed: _enter,
             child: const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
               child: Text('Join trip'),
@@ -157,9 +180,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
         ),
         const SizedBox(height: 14),
         TextButton(
-          onPressed: () {
-            Navigator.pushReplacementNamed(context, '/home');
-          },
+          onPressed: _enter,
           child: const Text('Start a new trip instead'),
         ),
       ],

@@ -1,37 +1,54 @@
 import 'package:flutter/material.dart';
 import '../config/device_identity.dart';
-import '../crdt/hlc.dart';
+import '../crdt/report.dart';
 import '../db/database_helper.dart';
 import '../models/pin_models.dart';
 import '../models/report_pin_adapter.dart';
-
+import '../sync/sync_controller.dart';
+import '../sync/sync_service.dart';
+ 
 class ReportDetailScreen extends StatefulWidget {
   final String pinId;
-
+ 
   const ReportDetailScreen({super.key, required this.pinId});
-
+ 
   @override
   State<ReportDetailScreen> createState() => _ReportDetailScreenState();
 }
-
+ 
 class _ReportDetailScreenState extends State<ReportDetailScreen> {
   Pin? _pin;
+  String _status = 'Open';
   List<ThreadMessage> _messages = [];
   final _composerController = TextEditingController();
   final _scrollController = ScrollController();
-
+ 
   @override
   void initState() {
     super.initState();
     _load();
+    SyncService.instance.dataVersion.addListener(_onSyncData);
   }
-
+ 
+  void _onSyncData() {
+    if (mounted) _load();
+  }
+ 
+  @override
+  void dispose() {
+    SyncService.instance.dataVersion.removeListener(_onSyncData);
+    _composerController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+ 
   Future<void> _load() async {
     final report = await DatabaseHelper.instance.getReport(widget.pinId);
     final rows = await DatabaseHelper.instance.getMessages(widget.pinId);
     if (!mounted) return;
     setState(() {
       _pin = ReportPinAdapter.pinFromReport(report, widget.pinId);
+      _status = (report.fields['status']?.value as String?) ?? 'Open';
       _messages = ReportPinAdapter.threadMessagesFromRows(
         rows,
         widget.pinId,
@@ -39,29 +56,38 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
       );
     });
   }
-
-  @override
-  void dispose() {
-    _composerController.dispose();
-    _scrollController.dispose();
-    super.dispose();
+ 
+  /// Change one field of this report (status, severity...). The new value
+  /// gets a fresh HLC timestamp, is saved locally, then pushed to any
+  /// connected device. If another device changed the same field while we
+  /// were apart, the later timestamp wins when we next sync.
+  Future<void> _setField(String name, dynamic value) async {
+    await DatabaseHelper.instance.upsertField(
+      widget.pinId,
+      name,
+      FieldValue(value, SyncService.instance.nextClock()),
+      DeviceIdentity.current,
+    );
+    await _load();
+    SyncController.broadcastReport(widget.pinId);
   }
-
+ 
   Future<void> _sendMessage() async {
     final text = _composerController.text.trim();
     if (text.isEmpty) return;
     _composerController.clear();
-
+ 
     await DatabaseHelper.instance.insertMessage(
       widget.pinId,
       'msg_${DeviceIdentity.current}_${DateTime.now().microsecondsSinceEpoch}',
       DeviceIdentity.current,
       'text',
       text,
-      HLC.tick(null),
+      SyncService.instance.nextClock(),
     );
     await _load();
-
+    SyncController.broadcastReport(widget.pinId);
+ 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -72,7 +98,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
       }
     });
   }
-
+ 
   @override
   Widget build(BuildContext context) {
     final pin = _pin;
@@ -93,6 +119,12 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
       body: Column(
         children: [
           _ReportSummaryCard(pin: pin),
+          _ControlsBar(
+            status: _status,
+            severity: pin.severity,
+            onStatusChanged: (s) => _setField('status', s),
+            onSeverityChanged: (s) => _setField('severity', s.name),
+          ),
           const Divider(height: 1),
           Expanded(
             child: _ThreadList(
@@ -106,18 +138,112 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     );
   }
 }
+ 
+class _ControlsBar extends StatelessWidget {
+  final String status;
+  final Severity severity;
+  final ValueChanged<String> onStatusChanged;
+  final ValueChanged<Severity> onSeverityChanged;
+ 
+  const _ControlsBar({
+    required this.status,
+    required this.severity,
+    required this.onStatusChanged,
+    required this.onSeverityChanged,
+  });
+ 
+  static const _statuses = ['Open', 'In progress', 'Resolved'];
+ 
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final safeStatus = _statuses.contains(status) ? status : 'Open';
+ 
+    return Container(
+      width: double.infinity,
+      color: theme.colorScheme.surfaceContainerLow,
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+      child: Row(
+        children: [
+          Expanded(
+            child: _LabeledDropdown<String>(
+              label: 'Status',
+              value: safeStatus,
+              items: _statuses
+                  .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                  .toList(),
+              onChanged: onStatusChanged,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: _LabeledDropdown<Severity>(
+              label: 'Severity',
+              value: severity,
+              items: Severity.values
+                  .map((s) => DropdownMenuItem(value: s, child: Text(s.label)))
+                  .toList(),
+              onChanged: onSeverityChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+ 
+class _LabeledDropdown<T> extends StatelessWidget {
+  final String label;
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T> onChanged;
+ 
+  const _LabeledDropdown({
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+ 
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label.toUpperCase(),
+          style: theme.textTheme.labelSmall?.copyWith(
+            letterSpacing: 1.1,
+            color: theme.colorScheme.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        DropdownButton<T>(
+          value: value,
+          isExpanded: true,
+          items: items,
+          onChanged: (v) {
+            if (v != null) onChanged(v);
+          },
+        ),
+      ],
+    );
+  }
+}
+ 
 class _ReportSummaryCard extends StatelessWidget {
   final Pin pin;
   const _ReportSummaryCard({required this.pin});
-
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final age = DateTime.now().difference(pin.createdAt);
-
+ 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
       color: theme.colorScheme.surfaceContainerLow,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -183,7 +309,7 @@ class _ReportSummaryCard extends StatelessWidget {
       ),
     );
   }
-
+ 
   String _formatAge(Duration d) {
     if (d.inMinutes < 1) return 'just now';
     if (d.inMinutes < 60) return '${d.inMinutes}m ago';
@@ -191,20 +317,20 @@ class _ReportSummaryCard extends StatelessWidget {
     return '${d.inDays}d ago';
   }
 }
-
+ 
 class _Badge extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
   final bool filled;
-
+ 
   const _Badge({
     required this.icon,
     required this.label,
     required this.color,
     required this.filled,
   });
-
+ 
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -232,12 +358,13 @@ class _Badge extends StatelessWidget {
     );
   }
 }
+ 
 class _ThreadList extends StatelessWidget {
   final List<ThreadMessage> messages;
   final ScrollController scrollController;
-
+ 
   const _ThreadList({required this.messages, required this.scrollController});
-
+ 
   @override
   Widget build(BuildContext context) {
     if (messages.isEmpty) {
@@ -250,7 +377,7 @@ class _ThreadList extends StatelessWidget {
         ),
       );
     }
-
+ 
     return ListView.builder(
       controller: scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
@@ -259,16 +386,16 @@ class _ThreadList extends StatelessWidget {
     );
   }
 }
-
+ 
 class _MessageBubble extends StatelessWidget {
   final ThreadMessage message;
   const _MessageBubble({required this.message});
-
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isOwn = message.isOwnDevice;
-
+ 
     return Align(
       alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -329,7 +456,8 @@ class _MessageBubble extends StatelessWidget {
                     message.synced ? Icons.done_all : Icons.schedule,
                     size: 13,
                     color: message.synced
-                        ? theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7)
+                        ? theme.colorScheme.onPrimaryContainer
+                            .withValues(alpha: 0.7)
                         : theme.colorScheme.error,
                   ),
                 ],
@@ -340,19 +468,20 @@ class _MessageBubble extends StatelessWidget {
       ),
     );
   }
-
+ 
   String _formatTime(DateTime t) {
     final h = t.hour.toString().padLeft(2, '0');
     final m = t.minute.toString().padLeft(2, '0');
     return '$h:$m';
   }
 }
+ 
 class _Composer extends StatelessWidget {
   final TextEditingController controller;
   final VoidCallback onSend;
-
+ 
   const _Composer({required this.controller, required this.onSend});
-
+ 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -362,7 +491,8 @@ class _Composer extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         decoration: BoxDecoration(
           color: theme.colorScheme.surface,
-          border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+          border:
+              Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
         ),
         child: Row(
           children: [
