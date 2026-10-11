@@ -1,39 +1,41 @@
 import 'package:flutter/material.dart';
 import '../config/device_identity.dart';
- 
+
 class LoginJoinScreen extends StatefulWidget {
   const LoginJoinScreen({super.key});
- 
+
   @override
   State<LoginJoinScreen> createState() => _LoginJoinScreenState();
 }
- 
+
 class _LoginJoinScreenState extends State<LoginJoinScreen> {
   // Which tab is currently selected. Changing it redraws the screen.
   bool showOrgTab = true;
-  final _teamController = TextEditingController();
- 
+  final _usernameController = TextEditingController();
+  final _tripNameController = TextEditingController();
+
   @override
   void dispose() {
-    _teamController.dispose();
+    _usernameController.dispose();
+    _tripNameController.dispose();
     super.dispose();
   }
- 
-  /// Every way into the app goes through here. The team name becomes this
-  /// phone's identity: it labels reports, messages and the Nearby device name,
-  /// so the two phones must use different names (e.g. Alpha and Bravo).
-  void _enter() {
-    final name = _teamController.text.trim();
-    if (name.isEmpty) {
+
+  /// The username (or trip name) becomes this phone's identity. It labels
+  /// the reports and messages this phone writes, and decides which chat
+  /// bubbles show as "mine". Two phones must use different names.
+  void _enter(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter your team name first.')),
+        const SnackBar(content: Text('Enter a name to continue.')),
       );
       return;
     }
-    DeviceIdentity.current = name;
+    DeviceIdentity.current = trimmed;
     Navigator.pushReplacementNamed(context, '/home');
   }
- 
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -53,16 +55,6 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
                 style: TextStyle(color: Colors.grey),
               ),
               const SizedBox(height: 24),
-              TextField(
-                controller: _teamController,
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(
-                  labelText: 'Your team name',
-                  hintText: 'e.g. Alpha',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
               Container(
                 decoration: BoxDecoration(
                   color: Colors.grey[200],
@@ -94,7 +86,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
       ),
     );
   }
- 
+
   Widget _buildTab(String label, bool selected) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -113,7 +105,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
       ),
     );
   }
- 
+
   Widget _buildOrgForm() {
     return Column(
       children: [
@@ -121,6 +113,15 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
           decoration: InputDecoration(
             labelText: 'Organization ID',
             hintText: 'e.g. district-rescue-12',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _usernameController,
+          decoration: const InputDecoration(
+            labelText: 'Username',
+            hintText: 'e.g. alpha',
             border: OutlineInputBorder(),
           ),
         ),
@@ -136,17 +137,23 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: _enter, // fake login for now
+            onPressed: () => _enter(_usernameController.text),
             child: const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
               child: Text('Log in'),
             ),
           ),
         ),
+        const SizedBox(height: 10),
+        const Text(
+          'Demo mode: organization ID and password are not verified yet.',
+          style: TextStyle(color: Colors.grey, fontSize: 12),
+          textAlign: TextAlign.center,
+        ),
       ],
     );
   }
- 
+
   Widget _buildTripForm() {
     return Column(
       children: [
@@ -155,6 +162,15 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
           decoration: InputDecoration(
             labelText: 'Trip code',
             hintText: 'e.g. RIDGE-482',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _tripNameController,
+          decoration: const InputDecoration(
+            labelText: 'Your name',
+            hintText: 'e.g. Meena',
             border: OutlineInputBorder(),
           ),
         ),
@@ -171,7 +187,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: _enter,
+            onPressed: () => _enter(_tripNameController.text),
             child: const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
               child: Text('Join trip'),
@@ -180,7 +196,7 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
         ),
         const SizedBox(height: 14),
         TextButton(
-          onPressed: _enter,
+          onPressed: () => _enter(_tripNameController.text),
           child: const Text('Start a new trip instead'),
         ),
       ],
