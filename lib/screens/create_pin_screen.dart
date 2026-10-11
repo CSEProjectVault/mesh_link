@@ -4,6 +4,7 @@ import '../config/device_identity.dart';
 import '../db/database_helper.dart';
 import '../models/pin_models.dart';
 import '../models/report_pin_adapter.dart';
+import '../sync/sync_controller.dart';
  
 class CreatePinScreen extends StatefulWidget {
   const CreatePinScreen({super.key});
@@ -66,6 +67,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
         await DatabaseHelper.instance
             .upsertField(pin.id, entry.key, entry.value, author);
       }
+      await SyncController.broadcastReport(pin.id);
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
