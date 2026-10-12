@@ -1,34 +1,30 @@
 import 'package:flutter/material.dart';
-import 'config/device_identity.dart';
-import 'screens/create_pin_screen.dart';
-import 'screens/home_screen.dart';
 import 'screens/login_join_screen.dart';
-import 'services/auth_service.dart';
+import 'screens/home_screen.dart';
+import 'screens/create_pin_screen.dart';
+import 'screens/report_detail_screen.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await AuthService.instance.load(); // restores a saved login, if any
+void main() {
   runApp(const MeshLinkApp());
 }
 
 class MeshLinkApp extends StatelessWidget {
-  const MeshLinkApp({super.key});
+  final bool startLoggedIn;
+  const MeshLinkApp({super.key, required this.startLoggedIn});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'MeshLink',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
-      home: ValueListenableBuilder<Session?>(
-        valueListenable: AuthService.instance.session,
-        builder: (context, s, _) {
-          if (s == null) return const LoginJoinScreen();
-          DeviceIdentity.current = s.displayName;
-          return const HomeScreen();
-        },
+      theme: ThemeData(
+        colorSchemeSeed: Colors.teal,
+        useMaterial3: true,
       ),
+      initialRoute: '/',
       routes: {
+        '/': (context) =>  LoginJoinScreen(),
+        '/home': (context) => HomeScreen(),
         '/create': (context) => const CreatePinScreen(),
       },
     );
