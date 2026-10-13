@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../config/device_identity.dart';
+import '../services/auth_service.dart';
 
 class LoginJoinScreen extends StatefulWidget {
   const LoginJoinScreen({super.key});
@@ -9,31 +9,46 @@ class LoginJoinScreen extends StatefulWidget {
 }
 
 class _LoginJoinScreenState extends State<LoginJoinScreen> {
-  // Which tab is currently selected. Changing it redraws the screen.
   bool showOrgTab = true;
-  final _usernameController = TextEditingController();
-  final _tripNameController = TextEditingController();
+  bool _busy = false;
+
+  final _orgId = TextEditingController();
+  final _orgName = TextEditingController();
+  final _orgPin = TextEditingController();
+  final _tripName = TextEditingController();
+  final _tripCode = TextEditingController();
 
   @override
   void dispose() {
-    _usernameController.dispose();
-    _tripNameController.dispose();
+    _orgId.dispose();
+    _orgName.dispose();
+    _orgPin.dispose();
+    _tripName.dispose();
+    _tripCode.dispose();
     super.dispose();
   }
 
-  /// The username (or trip name) becomes this phone's identity. It labels
-  /// the reports and messages this phone writes, and decides which chat
-  /// bubbles show as "mine". Two phones must use different names.
-  void _enter(String name) {
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a name to continue.')),
-      );
-      return;
+  /// Runs a login action. There is no navigation here: on success AuthService
+  /// updates its session and main.dart swaps this screen for Home.
+  Future<void> _run(Future<Session> Function() action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action();
+    } on AuthException catch (e) {
+      _showError(e.message);
+    } catch (e) {
+      _showError('Something went wrong: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
-    DeviceIdentity.current = trimmed;
-    Navigator.pushReplacementNamed(context, '/home');
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -109,27 +124,32 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
   Widget _buildOrgForm() {
     return Column(
       children: [
-        const TextField(
-          decoration: InputDecoration(
+        TextField(
+          controller: _orgId,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
             labelText: 'Organization ID',
-            hintText: 'e.g. district-rescue-12',
+            hintText: 'e.g. SAR-DEMO',
             border: OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 12),
         TextField(
-          controller: _usernameController,
+          controller: _orgName,
+          textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(
-            labelText: 'Username',
-            hintText: 'e.g. alpha',
+            labelText: 'Your name',
+            hintText: 'e.g. Alpha',
             border: OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 12),
-        const TextField(
+        TextField(
+          controller: _orgPin,
           obscureText: true,
-          decoration: InputDecoration(
-            labelText: 'Password',
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'PIN',
             border: OutlineInputBorder(),
           ),
         ),
@@ -137,16 +157,22 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: () => _enter(_usernameController.text),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('Log in'),
+            onPressed: _busy
+                ? null
+                : () => _run(() => AuthService.instance.orgLogin(
+                      orgId: _orgId.text,
+                      memberName: _orgName.text,
+                      pin: _orgPin.text,
+                    )),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(_busy ? 'Checking...' : 'Log in'),
             ),
           ),
         ),
         const SizedBox(height: 10),
         const Text(
-          'Demo mode: organization ID and password are not verified yet.',
+          'Demo organization: SAR-DEMO, PIN 2468',
           style: TextStyle(color: Colors.grey, fontSize: 12),
           textAlign: TextAlign.center,
         ),
@@ -157,17 +183,9 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
   Widget _buildTripForm() {
     return Column(
       children: [
-        const TextField(
-          textAlign: TextAlign.center,
-          decoration: InputDecoration(
-            labelText: 'Trip code',
-            hintText: 'e.g. RIDGE-482',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
         TextField(
-          controller: _tripNameController,
+          controller: _tripName,
+          textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(
             labelText: 'Your name',
             hintText: 'e.g. Meena',
@@ -175,19 +193,24 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: () {},
-            icon: const Icon(Icons.qr_code),
-            label: const Text('Scan QR instead'),
+        TextField(
+          controller: _tripCode,
+          textAlign: TextAlign.center,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
+            labelText: 'Trip code',
+            hintText: 'e.g. K7M2QX',
+            border: OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 12),
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: () => _enter(_tripNameController.text),
+            onPressed: _busy
+                ? null
+                : () => _run(() => AuthService.instance
+                    .joinTrip(_tripName.text, _tripCode.text)),
             child: const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
               child: Text('Join trip'),
@@ -196,7 +219,9 @@ class _LoginJoinScreenState extends State<LoginJoinScreen> {
         ),
         const SizedBox(height: 14),
         TextButton(
-          onPressed: () => _enter(_tripNameController.text),
+          onPressed: _busy
+              ? null
+              : () => _run(() => AuthService.instance.startTrip(_tripName.text)),
           child: const Text('Start a new trip instead'),
         ),
       ],

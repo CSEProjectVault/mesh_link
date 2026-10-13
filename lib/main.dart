@@ -5,7 +5,7 @@ import 'screens/create_pin_screen.dart';
 import 'screens/report_detail_screen.dart';
 
 void main() {
-  runApp(const MeshLinkApp());
+  runApp(const MeshLinkApp(startLoggedIn: false));
 }
 
 class MeshLinkApp extends StatelessWidget {

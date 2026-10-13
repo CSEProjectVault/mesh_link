@@ -14,7 +14,11 @@ class SyncController {
 
   static final ValueNotifier<int> peerCount = ValueNotifier<int>(0);
   static bool _started = false;
-
+    static Future<void> stop() async {
+    await NearbyTransport.instance.stop();
+    _started = false;
+    peerCount.value = 0;
+  }
   /// Safe to call more than once; only the first call does anything.
   static Future<void> start(String deviceName) async {
     if (_started) return;

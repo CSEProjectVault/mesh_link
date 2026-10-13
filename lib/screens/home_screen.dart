@@ -7,6 +7,7 @@ import '../sync/sync_controller.dart';
 import '../sync/sync_service.dart';
 import 'report_detail_screen.dart';
 import '../widgets/pin_map.dart';
+import '../services/auth_service.dart';
  
 class _HomeItem {
   final Pin pin;
@@ -23,7 +24,34 @@ class HomeScreen extends StatefulWidget {
  
 class _HomeScreenState extends State<HomeScreen> {
   late Future<List<_HomeItem>> _itemsFuture;
- 
+    void _showAccount() {
+    final s = AuthService.instance.session.value;
+    if (s == null) return;
+    final group = s.mode == AuthMode.org
+        ? 'Organization: ${s.orgId}'
+        : 'Trip code: ${s.tripCode}';
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.displayName),
+        content: SelectableText(group),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await SyncController.stop();
+              await AuthService.instance.logout();
+            },
+            child: const Text('Log out'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
   @override
   void initState() {
     super.initState();
@@ -75,6 +103,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Text('MeshLink · ${DeviceIdentity.current}'),
         actions: [
+           IconButton(
+             tooltip: 'Account',
+             icon: const Icon(Icons.account_circle_outlined),
+             onPressed: _showAccount,
+    ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: ValueListenableBuilder<int>(

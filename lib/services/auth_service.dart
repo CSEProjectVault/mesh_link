@@ -63,6 +63,18 @@ class AuthService {
 
   bool get isLoggedIn => session.value != null;
   String get deviceName => session.value?.displayName ?? 'Unknown';
+    /// Which group this phone belongs to: organization ID or trip code.
+  String get groupId => session.value?.orgId ?? session.value?.tripCode ?? '';
+
+  /// Secret shared by everyone in the group, used to prove membership to
+  /// other phones. Demo-level: the org value comes from the hashes stored in
+  /// the app, so the same APK limitation noted at the top of this file applies.
+  String get groupSecret {
+    final s = session.value;
+    if (s == null) return '';
+    if (s.mode == AuthMode.hiker) return s.tripCode ?? '';
+    return _demoOrgHashes[s.orgId] ?? '';
+  }
 
   // Demo organisations: sha256('<ORG_ID>:<PIN>').
   //   SAR-DEMO / 2468
