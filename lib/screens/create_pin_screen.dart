@@ -5,6 +5,7 @@ import '../db/database_helper.dart';
 import '../models/pin_models.dart';
 import '../models/report_pin_adapter.dart';
 import '../sync/sync_controller.dart';
+import '../services/location_service.dart';
  
 class CreatePinScreen extends StatefulWidget {
   const CreatePinScreen({super.key});
@@ -47,12 +48,21 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
     }
  
     setState(() => _submitting = true);
+    final loc = await LocationService.current();
+    if (loc == null) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No location yet. Check GPS is on and try again.')),
+      );
+      return;
+    }
  
     final author = DeviceIdentity.current;
     final pin = Pin(
       id: ReportPinAdapter.generateId(author),
-      lat: 46.8523, // TODO: replace with real GPS later
-      lng: -121.7603,
+      lat: loc.lat,
+      lng: loc.lng,
       severity: _selectedSeverity!,
       category: _selectedCategory!,
       title: _titleController.text.trim(),

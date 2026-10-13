@@ -6,6 +6,7 @@ import '../models/report_pin_adapter.dart';
 import '../sync/sync_controller.dart';
 import '../sync/sync_service.dart';
 import 'report_detail_screen.dart';
+import '../widgets/pin_map.dart';
  
 class _HomeItem {
   final Pin pin;
