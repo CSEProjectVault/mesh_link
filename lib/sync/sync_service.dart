@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
+
  
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
@@ -182,7 +182,7 @@ class SyncService {
           mine.timestamp.physicalTime == remote.timestamp.physicalTime &&
           mine.timestamp.logicalCounter == remote.timestamp.logicalCounter;
  
-      if (sameStamp && jsonEncode(mine!.value) != jsonEncode(remote.value)) {
+      if (sameStamp && jsonEncode(mine.value) != jsonEncode(remote.value)) {
         // Identical clocks but different values. Break the tie the same way
         // on every device (larger encoded value wins) so they cannot diverge.
         if (jsonEncode(remote.value).compareTo(jsonEncode(mine.value)) > 0) {

@@ -18,7 +18,7 @@ class LocationService {
   static Future<GeoPoint?> current() async {
     try {
       if (!await Geolocator.isLocationServiceEnabled()) {
-        return _lastKnown();
+        return await _lastKnown();
       }
 
       var permission = await Geolocator.checkPermission();

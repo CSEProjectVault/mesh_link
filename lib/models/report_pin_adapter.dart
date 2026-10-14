@@ -1,13 +1,11 @@
-import 'package:flutter/material.dart';
-import '../crdt/hlc.dart';
 import '../crdt/report.dart';
+import '../sync/sync_service.dart';
 import 'pin_models.dart';
 
 class ReportPinAdapter {
   // Generates a report/pin ID that's safe to create offline, on any
-  // device, with no risk of two diff
-  //erent phones ever picking the
-  // same ID — combines device name + current time + a tick counter.
+  // device, with no risk of two different phones ever picking the
+  // same ID — combines device name + current time.
   static String generateId(String deviceName) {
     final now = DateTime.now().millisecondsSinceEpoch;
     return '${deviceName}_$now';
@@ -16,7 +14,9 @@ class ReportPinAdapter {
   // Turn a freshly-created Pin (from CreatePinScreen) into a Report,
   // ready to be saved via DatabaseHelper.
   static Report reportFromPin(Pin pin, String authorName) {
-    final ts = HLC.tick(null);
+    // Use the device's shared clock (not a fresh one) so this edit is always
+    // ordered after anything already received from other phones.
+    final ts = SyncService.instance.nextClock();
     return Report({
       'title': FieldValue(pin.title, ts),
       'description': FieldValue(pin.description, ts),
@@ -37,8 +37,12 @@ class ReportPinAdapter {
       id: id,
       lat: (f['lat']?.value as num?)?.toDouble() ?? 0.0,
       lng: (f['lng']?.value as num?)?.toDouble() ?? 0.0,
-      severity: Severity.values.byName(f['severity']?.value ?? 'medium'),
-      category: PinCategory.values.byName(f['category']?.value ?? 'hazard'),
+      // asNameMap() returns null for unknown names instead of throwing, so a
+      // bad value from another phone cannot crash the home screen.
+      severity:
+          Severity.values.asNameMap()[f['severity']?.value] ?? Severity.medium,
+      category: PinCategory.values.asNameMap()[f['category']?.value] ??
+          PinCategory.hazard,
       title: f['title']?.value ?? '',
       description: f['description']?.value ?? '',
       authorName: f['authorName']?.value ?? 'Unknown',

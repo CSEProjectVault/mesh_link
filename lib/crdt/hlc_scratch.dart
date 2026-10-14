@@ -1,4 +1,6 @@
+// ignore_for_file: avoid_print
 import 'hlc.dart';
+
 void main() {
   print('--- tick() basics ---');
   final t0 = HLC.tick(null);

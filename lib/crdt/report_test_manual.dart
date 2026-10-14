@@ -1,3 +1,4 @@
+// ignore_for_file: avoid_print
 import 'hlc.dart';
 import 'report.dart';
 
