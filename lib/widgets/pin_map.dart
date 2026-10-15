@@ -8,18 +8,32 @@ import 'package:latlong2/latlong.dart';
 import '../models/pin_models.dart';
 import '../services/location_service.dart';
 
-/// Map of pins with a live "you are here" dot.
+/// Map of pins with a live "you are here" dot and your coordinates.
 ///
 /// OFFLINE NOTE: map *tiles* (the street/terrain images) come from the
-/// internet. Without a connection the background stays blank, but pins and
-/// your GPS dot still draw correctly, because those need no network. For real
-/// offline tiles, pre-download an area while online (see the
+/// internet. Without a connection the background stays blank, but pins, your
+/// GPS dot and the coordinate readout still work, because those need no
+/// network. For real offline tiles, pre-download an area while online (see the
 /// flutter_map_tile_caching package).
 class PinMap extends StatefulWidget {
   final List<Pin> pins;
   final ValueChanged<Pin>? onPinTap;
 
-  const PinMap({super.key, required this.pins, this.onPinTap});
+  /// When set, the map opens centred on this report (instead of on you) and
+  /// shows how far away it is.
+  final Pin? focusPin;
+
+  /// Space kept free at the bottom-right for the recentre button, so it does
+  /// not sit under a floating action button on the screen hosting the map.
+  final double controlsBottomInset;
+
+  const PinMap({
+    super.key,
+    required this.pins,
+    this.onPinTap,
+    this.focusPin,
+    this.controlsBottomInset = 12,
+  });
 
   @override
   State<PinMap> createState() => _PinMapState();
@@ -29,11 +43,14 @@ class _PinMapState extends State<PinMap> {
   final MapController _controller = MapController();
   StreamSubscription<Position>? _sub;
   LatLng? _me;
-  bool _following = true;
+  late bool _following;
 
   @override
   void initState() {
     super.initState();
+    // Follow the user by default, but not when we were asked to show one
+    // specific report.
+    _following = widget.focusPin == null;
     _startLocation();
   }
 
@@ -43,7 +60,9 @@ class _PinMapState extends State<PinMap> {
     final first = await LocationService.current();
     if (!mounted) return;
     if (first != null) {
-      setState(() => _me = LatLng(first.lat, first.lng));
+      final point = LatLng(first.lat, first.lng);
+      setState(() => _me = point);
+      if (_following) _moveTo(point);
     }
 
     // Live updates for the moving dot. Throws if permission was refused.
@@ -89,6 +108,8 @@ class _PinMapState extends State<PinMap> {
   }
 
   LatLng get _initialCenter {
+    final focus = widget.focusPin;
+    if (focus != null) return LatLng(focus.lat, focus.lng);
     if (_me != null) return _me!;
     if (widget.pins.isNotEmpty) {
       return LatLng(widget.pins.first.lat, widget.pins.first.lng);
@@ -96,10 +117,24 @@ class _PinMapState extends State<PinMap> {
     return const LatLng(20.5937, 78.9629); // fallback: centre of India
   }
 
+  static String _formatDistance(double meters) {
+    if (meters < 1000) return '${meters.round()} m';
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final hasTarget = _me != null || widget.pins.isNotEmpty;
+    final me = _me;
+    final focus = widget.focusPin;
+    final hasTarget = me != null || focus != null || widget.pins.isNotEmpty;
+
+    String? distanceText;
+    if (focus != null && me != null) {
+      final meters = const Distance()
+          .as(LengthUnit.Meter, me, LatLng(focus.lat, focus.lng));
+      distanceText = _formatDistance(meters);
+    }
 
     return Stack(
       children: [
@@ -139,9 +174,9 @@ class _PinMapState extends State<PinMap> {
                       ),
                     ),
                   ),
-                if (_me != null)
+                if (me != null)
                   Marker(
-                    point: _me!,
+                    point: me,
                     width: 24,
                     height: 24,
                     child: Container(
@@ -156,24 +191,75 @@ class _PinMapState extends State<PinMap> {
             ),
           ],
         ),
+        // Your coordinates (and distance to the report, if one is focused).
+        // Plain text, so it stays useful with no internet and blank tiles.
+        if (me != null)
+          Positioned(
+            left: 12,
+            bottom: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface.withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.my_location, size: 14),
+                      const SizedBox(width: 6),
+                      Text(
+                        'You  ${formatLatLng(me.latitude, me.longitude)}',
+                        style: theme.textTheme.labelMedium,
+                      ),
+                    ],
+                  ),
+                  if (distanceText != null && focus != null) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          focus.severity.icon,
+                          size: 14,
+                          color: focus.severity.color,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '$distanceText to report',
+                          style: theme.textTheme.labelMedium,
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
         Positioned(
           right: 12,
-          bottom: 12,
+          bottom: widget.controlsBottomInset,
           child: FloatingActionButton.small(
-            heroTag: 'recenter',
+            // No hero tag: several maps can be on the navigation stack at once.
+            heroTag: null,
             tooltip: 'Centre on my location',
-            onPressed: _me == null
+            onPressed: me == null
                 ? null
                 : () {
                     setState(() => _following = true);
-                    _moveTo(_me!);
+                    _moveTo(me);
                   },
             child: Icon(
               _following ? Icons.my_location : Icons.location_searching,
             ),
           ),
         ),
-        if (_me == null)
+        if (me == null)
           Positioned(
             left: 12,
             right: 12,

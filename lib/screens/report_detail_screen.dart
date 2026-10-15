@@ -6,7 +6,9 @@ import '../models/pin_models.dart';
 import '../models/report_pin_adapter.dart';
 import '../sync/sync_controller.dart';
 import '../sync/sync_service.dart';
- 
+import 'report_map_screen.dart';
+import '../services/report_actions.dart';
+
 class ReportDetailScreen extends StatefulWidget {
   final String pinId;
  
@@ -98,7 +100,10 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
       }
     });
   }
- 
+      Future<void> _deleteReport(Pin pin) async {
+    final deleted = await ReportActions.deleteWithConfirm(context, pin);
+    if (deleted && mounted) Navigator.of(context).pop();
+  }
   @override
   Widget build(BuildContext context) {
     final pin = _pin;
@@ -106,14 +111,23 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
-      appBar: AppBar(
+            appBar: AppBar(
         title: Text(pin.category.label),
         actions: [
           IconButton(
             tooltip: 'Report location on map',
             icon: const Icon(Icons.map_outlined),
-            onPressed: () {},
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => ReportMapScreen(pin: pin)),
+            ),
           ),
+                    if (ReportActions.canDelete(pin))
+            IconButton(
+              tooltip: 'Delete report',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () => _deleteReport(pin),
+            ),
         ],
       ),
       body: Column(
