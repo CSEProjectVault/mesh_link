@@ -3,27 +3,33 @@ import '../config/device_identity.dart';
 import '../db/database_helper.dart';
 import '../models/pin_models.dart';
 import '../models/report_pin_adapter.dart';
+import '../services/auth_service.dart';
+import '../services/report_actions.dart';
 import '../sync/sync_controller.dart';
 import '../sync/sync_service.dart';
+import '../widgets/pin_map.dart';
 import 'report_detail_screen.dart';
-import '../services/auth_service.dart';
- 
+
 class _HomeItem {
   final Pin pin;
   final String status;
   const _HomeItem(this.pin, this.status);
 }
- 
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
- 
+
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
- 
+
 class _HomeScreenState extends State<HomeScreen> {
   late Future<List<_HomeItem>> _itemsFuture;
-    void _showAccount() {
+
+  /// false = list of reports, true = map of reports.
+  bool _showMap = false;
+
+  void _showAccount() {
     final s = AuthService.instance.session.value;
     if (s == null) return;
     final group = s.mode == AuthMode.org
@@ -51,6 +57,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
   @override
   void initState() {
     super.initState();
@@ -61,22 +68,27 @@ class _HomeScreenState extends State<HomeScreen> {
       SyncController.start(DeviceIdentity.current);
     });
   }
- 
+
   @override
   void dispose() {
     SyncService.instance.dataVersion.removeListener(_onSyncData);
     super.dispose();
   }
- 
+
   void _onSyncData() {
     if (mounted) _reload();
   }
- 
+
   Future<List<_HomeItem>> _load() async {
     final ids = await DatabaseHelper.instance.getAllReportIds();
     final items = <_HomeItem>[];
     for (final id in ids) {
       final report = await DatabaseHelper.instance.getReport(id);
+
+      // Deleted reports are kept in the database (so they cannot come back
+      // from another phone) but are never shown.
+      if (report.fields['deleted']?.value == true) continue;
+
       items.add(_HomeItem(
         ReportPinAdapter.pinFromReport(report, id),
         (report.fields['status']?.value as String?) ?? 'Open',
@@ -93,20 +105,38 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     return items;
   }
- 
+
   void _reload() => setState(() => _itemsFuture = _load());
- 
+
+  Future<void> _openReport(String pinId) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => ReportDetailScreen(pinId: pinId)),
+    );
+    if (mounted) _reload();
+  }
+
+  Future<void> _deleteReport(Pin pin) async {
+    final deleted = await ReportActions.deleteWithConfirm(context, pin);
+    if (deleted && mounted) _reload();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('MeshLink · ${DeviceIdentity.current}'),
         actions: [
-           IconButton(
-             tooltip: 'Account',
-             icon: const Icon(Icons.account_circle_outlined),
-             onPressed: _showAccount,
-    ),
+          IconButton(
+            tooltip: _showMap ? 'Show list' : 'Show map',
+            icon: Icon(_showMap ? Icons.list_alt : Icons.map_outlined),
+            onPressed: () => setState(() => _showMap = !_showMap),
+          ),
+          IconButton(
+            tooltip: 'Account',
+            icon: const Icon(Icons.account_circle_outlined),
+            onPressed: _showAccount,
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: ValueListenableBuilder<int>(
@@ -129,10 +159,29 @@ class _HomeScreenState extends State<HomeScreen> {
       body: FutureBuilder<List<_HomeItem>>(
         future: _itemsFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
+          // Only show the spinner on the very first load. While reloading
+          // after a sync we keep the old data on screen, so the map is not
+          // torn down (and GPS restarted) every time something changes.
+          if (snapshot.connectionState != ConnectionState.done &&
+              !snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
           final items = snapshot.data ?? [];
+
+          if (_showMap) {
+            // Resolved reports are finished business, so they are left off
+            // the map to keep it readable. They stay in the list view.
+            return PinMap(
+              pins: [
+                for (final item in items)
+                  if (item.status != 'Resolved') item.pin,
+              ],
+              onPinTap: (pin) => _openReport(pin.id),
+              // Keep the recentre button clear of the + button.
+              controlsBottomInset: 88,
+            );
+          }
+
           if (items.isEmpty) {
             return const Center(
               child: Text('No reports yet. Tap + to add one.'),
@@ -155,15 +204,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   subtitle: Text(
                     '${pin.severity.label} · ${pin.category.label} · ${item.status}',
                   ),
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ReportDetailScreen(pinId: pin.id),
-                      ),
-                    );
-                    if (mounted) _reload();
-                  },
+                  onTap: () => _openReport(pin.id),
+                  onLongPress: ReportActions.canDelete(pin)
+                      ? () => _deleteReport(pin)
+                      : null,
                 ),
               );
             },

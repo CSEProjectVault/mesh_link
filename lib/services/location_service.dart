@@ -7,6 +7,11 @@ class GeoPoint {
   const GeoPoint(this.lat, this.lng);
 }
 
+/// Formats a position the way it is shown and copied everywhere in the app,
+/// e.g. "13.08270, 80.27070" (5 decimals is roughly 1 metre).
+String formatLatLng(double lat, double lng) =>
+    '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+
 /// One place that knows how to get the phone's position.
 ///
 /// GPS works without internet, so this is fine offline. It returns null when
@@ -27,7 +32,7 @@ class LocationService {
       }
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        return _lastKnown();
+        return await _lastKnown();
       }
 
       final pos = await Geolocator.getCurrentPosition(
