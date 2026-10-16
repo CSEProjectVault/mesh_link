@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
 
- 
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
  
@@ -119,7 +118,66 @@ class SyncService {
       Uint8List.fromList(utf8.encode(jsonEncode(map)));
  
   // ---- Applying incoming payloads ----------------------------------------
- 
+
+  /// Handle one payload from another phone. This is what the transport calls.
+  ///
+  /// Returns an optional reply to send straight back to the same phone:
+  /// for a batch of messages it is an acknowledgement listing the message
+  /// ids we now have. The sender stores those, and that is what turns the
+  /// "waiting" clock on its message into the "delivered" double tick.
+  Future<Uint8List?> processIncoming(Uint8List bytes) async {
+    Map<String, dynamic> data;
+    try {
+      data = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('Sync: ignoring unreadable payload: $e');
+      return null;
+    }
+    if (data['v'] != 1) return null;
+
+    switch (data['type']) {
+      case 'ack':
+        await _applyAck(data);
+        return null;
+
+      case 'messages':
+        try {
+          final reportId = data['id'] as String;
+          final list = List<dynamic>.from(data['messages'] as List);
+          final changed = await _mergeMessages(reportId, list);
+          if (changed) dataVersion.value++;
+
+          // Only acknowledge after the messages are safely stored.
+          final ids = [for (final m in list) (m as Map)['id'] as String];
+          if (ids.isEmpty) return null;
+          return _encode({
+            'v': 1,
+            'type': 'ack',
+            'id': reportId,
+            'ids': ids,
+          });
+        } catch (e) {
+          debugPrint('Sync: failed to merge messages: $e');
+          return null;
+        }
+
+      default:
+        await applyIncoming(bytes);
+        return null;
+    }
+  }
+
+  /// The other phone confirmed it received some of our messages.
+  Future<void> _applyAck(Map<String, dynamic> data) async {
+    try {
+      final ids = List<String>.from(data['ids'] as List);
+      final changed = await DatabaseHelper.instance.markDelivered(ids);
+      if (changed) dataVersion.value++;
+    } catch (e) {
+      debugPrint('Sync: failed to apply acknowledgement: $e');
+    }
+  }
+
   /// Merge one payload received from another device.
   /// Returns true if it changed anything locally.
   Future<bool> applyIncoming(Uint8List bytes) async {

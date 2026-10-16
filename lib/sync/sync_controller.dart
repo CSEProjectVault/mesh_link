@@ -5,8 +5,10 @@ import 'nearby_transport.dart';
 import 'sync_service.dart';
 
 /// Glue between the transport (bytes over Nearby) and SyncService
-/// (reports and merging). Screens only use three things from here:
+/// (reports and merging). Screens only use these from here:
 ///   - start(deviceName)       called once from the home screen
+///   - stop()                  called on log out
+///   - reconnect()             tap-to-reconnect on the connection chip
 ///   - broadcastReport(id)     called after any local edit or message
 ///   - peerCount               number of connected phones, for the UI chip
 class SyncController {
@@ -14,11 +16,17 @@ class SyncController {
 
   static final ValueNotifier<int> peerCount = ValueNotifier<int>(0);
   static bool _started = false;
-    static Future<void> stop() async {
+  static bool _wired = false;
+
+  static Future<void> stop() async {
     await NearbyTransport.instance.stop();
     _started = false;
     peerCount.value = 0;
   }
+
+  /// Drop all connections and search for phones again.
+  static Future<void> reconnect() => NearbyTransport.instance.restart();
+
   /// Safe to call more than once; only the first call does anything.
   static Future<void> start(String deviceName) async {
     if (_started) return;
@@ -28,22 +36,30 @@ class SyncController {
 
     final transport = NearbyTransport.instance;
 
-    transport.connectedPeers.addListener(() {
-      peerCount.value = transport.connectedPeers.value.length;
-    });
+    // Hook everything up only once, even if the user logs out and back in.
+    if (!_wired) {
+      _wired = true;
 
-    // A phone just connected: send it everything we have. It does the same
-    // for us. Merging is idempotent, so duplicates and any order are fine.
-    transport.onPeerConnected = (String peerId) async {
-      final payloads = await SyncService.instance.buildSnapshotPayloads();
-      for (final p in payloads) {
-        await transport.send(peerId, p);
-      }
-    };
+      transport.connectedPeers.addListener(() {
+        peerCount.value = transport.connectedPeers.value.length;
+      });
 
-    transport.onBytes = (String peerId, Uint8List bytes) async {
-      await SyncService.instance.applyIncoming(bytes);
-    };
+      // A phone just connected: send it everything we have. It does the same
+      // for us. Merging is idempotent, so duplicates and any order are fine.
+      transport.onPeerConnected = (String peerId) async {
+        final payloads = await SyncService.instance.buildSnapshotPayloads();
+        for (final p in payloads) {
+          await transport.send(peerId, p);
+        }
+      };
+
+      // Merge what arrived. For messages this returns an acknowledgement,
+      // which goes straight back so the sender can show "delivered".
+      transport.onBytes = (String peerId, Uint8List bytes) async {
+        final reply = await SyncService.instance.processIncoming(bytes);
+        if (reply != null) await transport.send(peerId, reply);
+      };
+    }
 
     await transport.start(deviceName);
   }

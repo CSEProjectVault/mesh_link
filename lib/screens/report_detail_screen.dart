@@ -44,9 +44,10 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     super.dispose();
   }
  
-  Future<void> _load() async {
+    Future<void> _load() async {
     final report = await DatabaseHelper.instance.getReport(widget.pinId);
     final rows = await DatabaseHelper.instance.getMessages(widget.pinId);
+    final delivered = await DatabaseHelper.instance.getDeliveredIds();
     if (!mounted) return;
     setState(() {
       _pin = ReportPinAdapter.pinFromReport(report, widget.pinId);
@@ -55,6 +56,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
         rows,
         widget.pinId,
         DeviceIdentity.current,
+        delivered,
       );
     });
   }
