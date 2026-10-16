@@ -7,6 +7,7 @@ import 'package:sqflite/sqflite.dart';
 import '../crdt/hlc.dart';
 import '../crdt/report.dart';
 import '../db/database_helper.dart';
+import '../config/device_identity.dart';
  
 /// Turns local data into payloads for other devices and merges payloads
 /// received from them. It only deals with bytes, so it does not care whether
