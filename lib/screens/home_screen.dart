@@ -143,7 +143,9 @@ class _HomeScreenState extends State<HomeScreen> {
               valueListenable: SyncController.peerCount,
               builder: (context, count, _) {
                 final connected = count > 0;
-                return Chip(
+                                return ActionChip(
+                  tooltip: 'Tap to reconnect',
+                  onPressed: SyncController.reconnect,
                   avatar: Icon(
                     connected ? Icons.wifi : Icons.wifi_off,
                     size: 16,

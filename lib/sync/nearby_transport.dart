@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math';
 
-
 import 'package:flutter/foundation.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 
@@ -13,9 +12,12 @@ import 'package:nearby_connections/nearby_connections.dart';
 /// both sides requesting a connection to each other at the same moment, only
 /// the phone whose name sorts first sends the request.
 ///
-/// NOTE: the plugin calls below follow the nearby_connections 4.x README.
-/// If the analyzer complains about a name or signature, copy the form used in
-/// the working spike (lib/sync/nearby_main.dart); the logic stays the same.
+/// SELF-HEALING: Nearby silently stops advertising and discovering when
+/// Bluetooth or Wi-Fi is switched off, and does not restart by itself when
+/// they come back. So while this phone has no peers, a timer restarts BOTH
+/// advertising and discovery every few seconds. That is what lets two phones
+/// find each other again after the radios are toggled, without restarting
+/// the app.
 class NearbyTransport {
   NearbyTransport._();
   static final NearbyTransport instance = NearbyTransport._();
@@ -34,8 +36,10 @@ class NearbyTransport {
   void Function(String endpointId, Uint8List bytes)? onBytes;
 
   bool _running = false;
+  bool _restarting = false;
+  int _pendingChecks = 0;
   late String _myName;
-  Timer? _retryTimer;
+  Timer? _healthTimer;
   final Set<String> _pending = <String>{};
 
   Future<void> start(String deviceName) async {
@@ -45,31 +49,30 @@ class NearbyTransport {
     // team name, and gives a stable ordering for the tie-break below.
     _myName = '$deviceName#${Random().nextInt(9000) + 1000}';
 
-    await _advertise();
-    await _discover();
+    await _startRadios();
 
-    // Discovery can go quiet after a disconnect, so restart it while alone.
-    _retryTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
-      if (!_running || connectedPeers.value.isNotEmpty) return;
-      try {
-        await Nearby().stopDiscovery();
-      } catch (_) {}
-      await _discover();
-    });
+    // A slightly different period per phone, so two phones do not always
+    // restart at exactly the same moment.
+    final seconds = 10 + Random().nextInt(6);
+    _healthTimer?.cancel();
+    _healthTimer =
+        Timer.periodic(Duration(seconds: seconds), (_) => _checkHealth());
   }
 
   Future<void> stop() async {
     _running = false;
-    _retryTimer?.cancel();
-    try {
-      await Nearby().stopAdvertising();
-      await Nearby().stopDiscovery();
-      await Nearby().stopAllEndpoints();
-    } catch (e) {
-      debugPrint('Nearby stop error: $e');
-    }
+    _healthTimer?.cancel();
+    _healthTimer = null;
+    await _stopRadios(dropConnections: true);
     _pending.clear();
     connectedPeers.value = <String>{};
+  }
+
+  /// Hard reset: drop every connection and search again from scratch.
+  /// Wired to the connection chip on the home screen (tap to reconnect).
+  Future<void> restart() async {
+    if (!_running || _restarting) return;
+    await _restartRadios(dropConnections: true);
   }
 
   Future<void> send(String endpointId, Uint8List bytes) async {
@@ -77,6 +80,68 @@ class NearbyTransport {
       await Nearby().sendBytesPayload(endpointId, bytes);
     } catch (e) {
       debugPrint('Nearby send failed: $e');
+      // The link is most likely dead (radio switched off, phone walked away).
+      await _dropPeer(endpointId);
+    }
+  }
+
+  // ---- Keeping the connection alive ---------------------------------------
+
+  Future<void> _checkHealth() async {
+    if (!_running || _restarting) return;
+
+    // Connected: nothing to do.
+    if (connectedPeers.value.isNotEmpty) {
+      _pendingChecks = 0;
+      return;
+    }
+
+    // A connection attempt is in flight: give it a little time, but not
+    // forever, because a stuck attempt would block that phone for good.
+    if (_pending.isNotEmpty && ++_pendingChecks < 3) return;
+
+    _pendingChecks = 0;
+    await _restartRadios();
+  }
+
+  Future<void> _restartRadios({bool dropConnections = false}) async {
+    _restarting = true;
+    try {
+      await _stopRadios(dropConnections: dropConnections);
+      _pending.clear();
+      if (dropConnections) connectedPeers.value = <String>{};
+      if (_running) await _startRadios();
+    } finally {
+      _restarting = false;
+    }
+  }
+
+  Future<void> _stopRadios({bool dropConnections = false}) async {
+    try {
+      await Nearby().stopAdvertising();
+    } catch (_) {}
+    try {
+      await Nearby().stopDiscovery();
+    } catch (_) {}
+    if (dropConnections) {
+      try {
+        await Nearby().stopAllEndpoints();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _startRadios() async {
+    await _advertise();
+    await _discover();
+  }
+
+  Future<void> _dropPeer(String id) async {
+    _pending.remove(id);
+    try {
+      await Nearby().disconnectFromEndpoint(id);
+    } catch (_) {}
+    if (connectedPeers.value.contains(id)) {
+      connectedPeers.value = <String>{...connectedPeers.value}..remove(id);
     }
   }
 
@@ -109,13 +174,7 @@ class NearbyTransport {
           // Only the phone with the smaller name initiates.
           if (_myName.compareTo(name) >= 0) return;
           _pending.add(id);
-          Nearby().requestConnection(
-            _myName,
-            id,
-            onConnectionInitiated: _onConnectionInitiated,
-            onConnectionResult: _onConnectionResult,
-            onDisconnected: _onDisconnected,
-          );
+          _requestConnection(id);
         },
         onEndpointLost: (String? id) {
           if (id != null) _pending.remove(id);
@@ -124,6 +183,23 @@ class NearbyTransport {
       );
     } catch (e) {
       debugPrint('Nearby discovery failed: $e');
+    }
+  }
+
+  Future<void> _requestConnection(String id) async {
+    try {
+      await Nearby().requestConnection(
+        _myName,
+        id,
+        onConnectionInitiated: _onConnectionInitiated,
+        onConnectionResult: _onConnectionResult,
+        onDisconnected: _onDisconnected,
+      );
+    } catch (e) {
+      // Without this, a failed request left the id in _pending forever and
+      // that phone could never be connected to again.
+      debugPrint('Nearby requestConnection failed: $e');
+      _pending.remove(id);
     }
   }
 

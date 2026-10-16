@@ -54,25 +54,30 @@ class ReportPinAdapter {
 
   // Turn raw DB rows (from DatabaseHelper.getMessages) into the
   // ThreadMessage objects report_detail_screen.dart expects.
+  //
+  // [deliveredIds] are the ids of our own messages that another phone has
+  // confirmed receiving (DatabaseHelper.getDeliveredIds).
   static List<ThreadMessage> threadMessagesFromRows(
     List<Map<String, dynamic>> rows,
     String pinId,
-    String currentDeviceName,
-  ) {
+    String currentDeviceName, [
+    Set<String> deliveredIds = const <String>{},
+  ]) {
     return rows.map((row) {
       final physical = row['hlc_physical'] as int;
+      final id = row['id'] as String;
+      final isOwn = row['from_team'] == currentDeviceName;
       return ThreadMessage(
-        id: row['id'] as String,
+        id: id,
         pinId: pinId,
         authorName: row['from_team'] as String,
         text: row['content'] as String,
         timestamp: DateTime.fromMillisecondsSinceEpoch(physical),
-        isOwnDevice: row['from_team'] == currentDeviceName,
-        // NOTE: synced is always true here — this only reflects data
-        // that's already in the local DB. Real "not yet shared with
-        // anyone else" status needs a separate sync-tracking column,
-        // not yet built — flag this as a known gap, not a bug.
-        synced: row['from_team'] != currentDeviceName,
+        isOwnDevice: isOwn,
+        // Messages from other phones have obviously arrived. Our own show the
+        // double tick only once another phone has confirmed receiving them;
+        // until then they show the waiting clock.
+        synced: isOwn ? deliveredIds.contains(id) : true,
       );
     }).toList();
   }
