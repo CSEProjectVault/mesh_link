@@ -31,17 +31,28 @@ class Report {
       // needsAmbulance, it CAN change back, because someone explicitly
       // marked it resolved.
       if (key == 'ambulanceStatus') {
-        if (!fields.containsKey(key) || otherField.timestamp.isAfter(fields[key]!.timestamp)) {
+        if (!fields.containsKey(key) || _wins(otherField, fields[key]!)) {
           fields[key] = otherField;
         }
         return;
       }
 
       // Default: Last-Writer-Wins for everything else.
-      if (!fields.containsKey(key) || otherField.timestamp.isAfter(fields[key]!.timestamp)) {
+      if (!fields.containsKey(key) || _wins(otherField, fields[key]!)) {
         fields[key] = otherField;
       }
     });
+  }
+
+  /// Does [incoming] beat [current]? Later HLC wins. Two different devices
+  /// can produce the exact same HLC (same millisecond and counter) with
+  /// different values; without a rule for that, the winner would depend on
+  /// merge order and phones would never converge. So exact ties are broken
+  /// by comparing the values themselves, which every phone computes the same.
+  static bool _wins(FieldValue incoming, FieldValue current) {
+    if (incoming.timestamp.isAfter(current.timestamp)) return true;
+    if (current.timestamp.isAfter(incoming.timestamp)) return false;
+    return incoming.value.toString().compareTo(current.value.toString()) > 0;
   }
 
   @override
