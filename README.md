@@ -1,6 +1,7 @@
 # MeshLink — Offline Field Sync
 
 Rescue and trekking teams often work where there is no signal. MeshLink lets phones share incident reports directly with each other over Bluetooth / Wi-Fi (Android Nearby Connections), with no server and no internet. When two people edit the same report while out of contact, the edits merge automatically and every phone ends up with the same data.
+   📄 **[Read the full design note →](docs/DESIGN.md)**
 
 ## Design
 
